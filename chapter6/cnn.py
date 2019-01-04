@@ -6,7 +6,6 @@ import gzip
 import os
 import sys
 import time
-
 import numpy as np
 import urllib
 import tensorflow as tf
@@ -267,4 +266,3 @@ with tf.Session() as sess:
     # finally print the result:
     test_error = error_rate(eval_in_batches(test_data, sess), test_labels)
     print('Test error: %.1f%%' % test_error)
-

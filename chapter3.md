@@ -82,8 +82,11 @@ plt.scatter(x[:,0], x[:,1], c=y, cmap='jet')
 ![](assets/matplotlib/c3class.png)
 
 ### TensorFlow Concepts
-- **Placeholders**: The input nodes through which information enters TensorFlow.
+- **Placeholders**: The input nodes through which information enters TensorFlow. These are what we use to control the input to our computational graph
     - Example: `tf.placeholder(tf.float32, shape=(2,2))`
+
+- **Model Variables**: Variables that are going to be optimized as our computaional graph is run in every iteration
+
 - **Feed dictionaries and Fetches**: _Feed dictionaries_ map `tf.Tensors` to `np.ndarray` objects that contain the concrete values for these placeholders, serving as input to a TensorFlow computation graph. The _fetch_ is a tensor whose value is retrieved after the computation
     > ```py {cmd="/anaconda3/envs/deeplearning/bin/python"}
     > import tensorflow as tf
