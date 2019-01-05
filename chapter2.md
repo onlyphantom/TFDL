@@ -153,3 +153,94 @@ tf.enable_eager_execution()
 print(tf.round([0.2, 0.5, 0.7, 0.51, 0.49, 0.5]))
 print(tf.reduce_sum([0.3, 0.51]))
 ```
+#### Specification of `shape` parameters
+1.  TensorFlow uses arrays rather than tuple -- it converts tuples to arrays. Therefore, for the most part using `[]` or `()` yields equivalent results.
+
+  ```py {cmd="/anaconda3/envs/deeplearning/bin/python"}
+  import tensorflow as tf
+  import numpy as np
+  tf.enable_eager_execution()
+
+  x = tf.constant(np.arange(4), shape=[2,2])
+  y = tf.constant(np.arange(4), shape=(2,2))
+  print(x, y, sep='\n')
+  print('--- \n', tf.equal(x,y))
+  ```
+
+2. `tf.constant()` constructs the tensor explicitly and **requires a fixed dimension to be specified**.
+
+Notice that in the following snippet, `a`, `b` and `c` would yield completely identical tensor. However, if we uncomment `d`, the execution will be halted by a `TypeError`:
+> TypeError: %d format: a number is required, not NoneType
+
+Substituting the value of `np.arange(2)` with `np.arange(6)` in `d` will yield the same `TypeError`. In fact, substituting `np.arange(6)` into any of `a`, `b` or `c` would also lead to an error:
+>  TypeError: Eager execution of tf.constant with unsupported shape (value has 6 elements, shape is (2,) with 2 elements).
+
+However, notice that `b = tf.constant(np.arange(6), shape=(2,3))` would be a perfectly valid construction and a tensor of shape `(2,3)` is constructed in the graph. In summary, `tf.constant()` has fixed sizes and value at graph construction time, a behavior that is **different from `tf.placeholder` or `tf.Variable`**.
+
+```py {cmd="/anaconda3/envs/deeplearning/bin/python"}
+import tensorflow as tf
+import numpy as np
+tf.enable_eager_execution()
+
+a = tf.constant(np.arange(2), shape=[2])
+b = tf.constant(np.arange(2), shape=(2,))
+c = tf.constant(np.arange(2), shape=(2))
+print(a)
+# d = tf.constant(np.arange(2), shape=(2, None))
+```
+
+3. Using `None` as a dimension value in `tf.placeholder`
+Notice that `a` in the following snippet has `shape=(3, None)`, which means that the first dimension has to be a shape of 3, while the second dimension can be an aribitary, unspecified amount to be figured out later. Passing `None` to a shape argument of a `tf.placeholder` tells it simply that that dimension is unspecified, and to infer that dimension from the tensor you are feeding it during run-time (when we run a session).
+
+In the code snippet below, `feed_dict` feeds a (3,2) array while `feed_dict2` feeds a (3,4) array. 
+
+```py {cmd="/anaconda3/envs/deeplearning/bin/python"}
+import tensorflow as tf
+import numpy as np
+
+a = tf.placeholder(tf.float32, shape=(3, None))
+c = a ** 2
+feed_dict = {a: np.array([[2, 0],
+       [1, 0],
+       [3, 4]])}
+feed_dict2 = {a: np.random.rand(3,4)}
+
+with tf.Session() as sess:
+  result = sess.run(c, feed_dict=feed_dict)
+  result2 = sess.run(c, feed_dict=feed_dict2)
+  print(result, '\n --- \n', result2)
+
+```
+**It is important not to confuse `None` with `[None]` or even with `[]`**. Placeholder with `[]` shape takes a single scalar value directly. Placeholder with `[None]` shape takes a 1-dimensional array and placeholder with `None` shape can take in any value while computation takes place.
+
+```py
+x = tf.placeholder(dtype=tf.int32, shape=[], name="foo1")
+y = tf.placeholder(dtype=tf.int32, shape=[None], name="foo2")
+z = tf.placeholder(dtype=tf.int32, shape=None, name="foo3")
+
+val1 = np.array((1, 2, 3))
+val2 = 45
+
+with tf.Session() as sess:
+    #print(sess.run(x, feed_dict = {x: val1}))  # Fails
+    print(sess.run(y, feed_dict = {y: val1}))
+    print(sess.run(z, feed_dict = {z: val1}))
+
+    print(sess.run(x, feed_dict = {x: val2}))
+    #print(sess.run(y, feed_dict = {y: val2}))  # Fails
+    print(sess.run(z, feed_dict = {z: val2}))
+```
+
+4. As a general rule, we give `tf.Variable` shapes through initializing it with **constants** or **random weights** and then using the `tf.global_variables_initializer()` method:
+```py
+x = tf.Variable(tf.zeros((2,2)), name="weights_constant")
+y = tf.Variable(tf.random_normal((2,2)), name="weights_random")
+
+with tf.Session() as sess:
+  sess.run(tf.global_variables_initializer())
+  result = sess.run(x)
+  print(result)
+# return: 
+#  [[0. 0.]
+#  [0. 0.]]
+```
