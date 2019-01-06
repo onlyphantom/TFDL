@@ -129,17 +129,9 @@ train_labels = train_labels[VALIDATION_SIZE:]
 #### 3. Construct computational graph
 Our model starts off with a convolutional layer (`tf.nn.conv2d`), which requires four parameters: `input`, `filter`, `strides`, `padding`. We would use a `tf.placeholder` for the input argument, setting it to receive our mini-batch data later at each step. We set `strides=[1,1,1,1]` the filter would slide by 1 unit across all 4 dimensions (x, y, channel, and image index). We set `padding='SAME'` so zero-padding would be added if necessary to preserve the dimension of the input. The filters are learnable weights, so we'll use `tf.Variable` and initialize some 5x5 filters with random weights generated from a truncated normal distribution. 
 
-Up to our second conv layer, the computational graph looks like the following:
+The computation graph is constructed with the following code. If you need a refresher on shapes, refer to the [Specification of `shape` parameters](chapter2.md) section.
 
 ```py
-train_data_node = tf.placeholder(
-    tf.float32,
-    shape=(BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS))
-
-train_labels_node = tf.placeholder(tf.int64, shape=(BATCH_SIZE, ))
-
-eval_data = tf.placeholder(tf.float32, shape=(EVAL_BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS))
-
 conv1_weights = tf.Variable(
     # 5x5 filter, depth 32
     tf.truncated_normal([5,5, NUM_CHANNELS, 32],
@@ -155,11 +147,22 @@ conv2_weights = tf.Variable(
 
 conv2_biases = tf.Variable(tf.constant(0.1, shape=[64], dtype=tf.float32))
 
+fc1_weights = tf.Variable(
+    # after two pooling layers, each reducing the input by a factor of 2,
+    # our input image is now of dimension 28/4=7 (7x7)
+    tf.truncated_normal([7 * 7 * 64, 512],
+                        stddev=0.1,
+                        seed=SEED, dtype=tf.float32))
+fc1_biases = tf.Variable(tf.constant(0.1, shape=[512], dtype=tf.float32))
+
+fc2_weights = tf.Variable(
+    tf.truncated_normal([512, NUM_LABELS],
+                        stddev=0.1,
+                        seed=SEED, dtype=tf.float32))
+fc2_biases = tf.Variable(tf.constant(0.1, shape=[NUM_LABELS], dtype=tf.float32))
+
 def model(data, train=False):
-    # 2d convolution, with 'SAME' padding (output feature map has the same 
-    # size as the input). Note that {strides} is a 4D array whose shape matches
-    # the data layout: [image index, y, x, depth]
-    conv = tf.nn.conv2d(input=data, 
+    conv = tf.nn.conv2d(input=data, # 60000, 28, 28, 1
         filter=conv1_weights,
         strides=[1,1,1,1],
         padding='SAME')
@@ -168,7 +171,7 @@ def model(data, train=False):
         ksize=[1,2,2,1],
         strides=[1,2,2,1],
         padding='SAME')
-    conv = tf.nn.conv2d(input=pool,
+    conv = tf.nn.conv2d(input=pool, # 60000, 14, 14, 32
         filter=conv2_weights,
         strides=[1,1,1,1],
         padding='SAME')
@@ -177,9 +180,86 @@ def model(data, train=False):
         ksize=[1,2,2,1],
         strides=[1,2,2,1],
         padding='SAME')
-    ...
+    # reshape the feature map cuboid into a 2d matrix to feed into FC layers
+    pool_shape = pool.get_shape().as_list() # 60000, 7, 7, 64
+    reshape = tf.reshape(
+        pool,
+        [pool_shape[0], pool_shape[1] * pool_shape[2] * pool_shape[3]])
+
+    # FC layers, note the '+' operation automatically broadcasts the biases
+    hidden = tf.nn.relu(tf.matmul(reshape, fc1_weights) + fc1_biases) # (60000, 3136) %*% (3136, 512) -> (60000, 512)
+    # Add dropout during training only. Dropout alsos scales activation such that no rescaling is needed at evaluation time
+    if train:
+        hidden = tf.nn.dropout(hidden, 0.5, seed=SEED)
+    return tf.matmul(hidden, fc2_weights) + fc2_biases 
+    # final computation: (60000, 512) %*% (512, 10) -> (60000, 10)
 ```
 
+We performed (Conv+Relu+Max-Pool)*2 + FC + Dropout + FC and notice the final dimension would be a nice (60000, 10), which we can interpret as 10 values for each of the training sample. 
+
+#### 4. Using computation graph to compute loss
+We then have to pass a placeholder, `train_data_node`, into the computational graph  `model(data, train=False)`. This allows for us to use  the `feed_dict` pattern to flow our `train_data` through the network upon an active session like such:
+```py
+with tf.Session() as sess:
+    tf.global_variables_initializer().run()
+    feed_dict = {train_data_node: train_data[1:10, ...]}
+    sess.run(optimizer, feed_dict=feed_dict)
+```
+
+A `optimizer`'s main task is to minimize a certain loss function; Recall that our `model` returns a (60000, 10) shaped tensor. We'll assign this output to `logits`, and then use a particularly helpful TensorFlow's function to compute the cross-entropy loss.
+
+`tf.nn.sparse_softmax_cross_entropy_with_logits(logits, labels)` returns a tensor of the same shape as `labels`, which in our case would be one-dimensional [60000]. From the [documentation](https://www.tensorflow.org/api_docs/python/tf/nn/sparse_softmax_cross_entropy_with_logits), it is advised to pass in the unscaled logits (logits prior to the softmax transformation into probability distribution):
+
+> WARNING: This op expects unscaled logits, since it performs a softmax on logits internally for efficiency. Do not call this op with the output of softmax, as it will produce incorrect results.
+
+We then define a single "grand loss" function by taking the mean of the loss across the 60000 training samples. Notice that we want the loss to also include L2 regularization for the parameters in our FC layers. 
+
+```py
+train_data_node = tf.placeholder(
+    tf.float32,
+    shape=[BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS])
+
+train_labels_node = tf.placeholder(tf.int64, shape=[BATCH_SIZE])
+
+eval_data = tf.placeholder(tf.float32, shape=[EVAL_BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS])
+
+logits = model(train_data_node, train=True)
+loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+    logits=logits, labels=train_labels_node))
+
+# L2 regularization for the FC parameters and add them to loss
+regularizers = (tf.nn.l2_loss(fc1_weights) 
+                + tf.nn.l2_loss(fc1_biases) 
+                + tf.nn.l2_loss(fc2_weights) 
+                + tf.nn.l2_loss(fc2_biases))
+loss += 5e-4 * regularizers
+
+# Optimizer: set up a variable that's incremented once per batch
+# and controls the learning rate decay
+batch = tf.Variable(0, dtype=tf.float32)
+
+# Decay once per epoch, using an exponential schedule starting at 0.01
+learning_rate = tf.train.exponential_decay(
+    0.01, # base learning rate
+    batch * BATCH_SIZE, # current index into the dataset
+    train_size, # decay step
+    0.95, # decay rate
+    staircase=True
+)
+
+# Use simple momentum for the optimization
+# global_step control the parameter to be incremented by 1 after loss variable has been updated
+optimizer = tf.train.MomentumOptimizer(learning_rate=learning_rate, 
+                momentum=0.9).minimize(loss, global_step=batch)
+
+```
+With the "grand loss" ready, we now call `tf.train.MomentumOptimizer().minimize(loss)`. Notice that `global_step` is an optional `Variable` to increment by one after the variables have been updated. We want an exponentially decaying learning rate instead of a fixed value for our momentum optimizer, and we'll make use of the `tf.train.exponential_decay()` function for this. From the docs, the function:
+
+> Applies exponential decay to the learning rate. When training a model, it is often recommended to lower the learning rate as the training progresses.  This function applies an exponential decay function to a provided initial learning rate. It requires a `global_step` value to
+compute the decayed learning rate. You can just pass a TensorFlow variable that you increment at each training step.
+The function returns the decayed learning rate.
+
+#### 5. Compute predictions
 
 
 

@@ -100,9 +100,9 @@ train_size = train_labels.shape[0]
 # fed a batch of training data at each step using the feed_dict convention
 train_data_node = tf.placeholder(
     tf.float32,
-    shape=(BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS))
-train_labels_node = tf.placeholder(tf.int64, shape=(BATCH_SIZE, ))
-eval_data = tf.placeholder(tf.float32, shape=(EVAL_BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS))
+    shape=[BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS])
+train_labels_node = tf.placeholder(tf.int64, shape=[BATCH_SIZE])
+eval_data = tf.placeholder(tf.float32, shape=[EVAL_BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS])
 
 # Variables holding the trainable weights. They are passed an initial value
 # and will be assigned when we call the .global_variables_initializer() function
