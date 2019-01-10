@@ -260,14 +260,99 @@ compute the decayed learning rate. You can just pass a TensorFlow variable that 
 The function returns the decayed learning rate.
 
 #### 5. Compute predictions
+When the optimizer is run, the variables (weights) are updated to try and converge at a minima. We do not yet have a prediction vector yet. 
 
+We'll compute our training prediction by performing a soft-max on the unscaled logits returned from the model in earlier steps. Then, we'll define a utility function that take in `data` and a `tf.Session()` as parameters. This function, `eval_in_batches()`:
+1. Declare `predictions` as an `ndarray` of size `(NROW, NUM_LABELS)`
+2. Use a for-loop to procedurally fill up `predictions` by calling `sess.run(eval_prediction, feed_dict={eval_data: data[begin:end, ...]}` so the right mini-batch gets fed into the `sess.run()` call 
+3. Return `predictions`
 
+```py
+# Predictions for current training minibatch
+train_prediction = tf.nn.softmax(logits)
 
+# Predictions for test and validation, which is computed less often
+eval_prediction = tf.nn.softmax(model(eval_data))
 
+def eval_in_batches(data, sess):
+    size = data.shape[0]
+    if size < EVAL_BATCH_SIZE:
+        raise ValueError("Batch size for evals larger than dataset:" % size)
+    predictions = np.ndarray(shape=(size, NUM_LABELS), dtype=np.float32)
 
+    for begin in range(0, size, EVAL_BATCH_SIZE):
+        end = begin + EVAL_BATCH_SIZE
+        if end <= size:
+            predictions[begin:end, :] = sess.run(
+                eval_prediction,
+                feed_dict={eval_data: data[begin:end, ...]})
+        else:
+            batch_predictions = sess.run(
+                eval_prediction,
+                feed_dict={eval_data: data[-EVAL_BATCH_SIZE:, ...]})
+            predictions[begin:, :] = batch_predictions[begin-size:, :]
+    return predictions
+```
+The final part is to use a session to initialize the global variables, and then run the training. If we have 500 examples and we wish to run the whole feedforward + backprop operation for a total of 20 times, each time using a batch size of 100 then the outer for-loop would be evaluated 500*20/100 = 100 times.
+
+On the offset, notice that we make use of the modulo operator (`(step * BATCH_SIZE) % (train_size - BATCH_SIZE)`) to apply the right subsetting. To make this more concrete, consider:
+`train_size` = 4950
+`BATCH_SIZE` = 500
+At step 0:
+    - `offset` would be 0 % (4950-500) = 0
+    - batch_data = train_data[0:500, ...]
+At step 1:
+    - `offset` would be 500 % (4950-500) = 500
+    - batch_data = train_data[500:1000, ...]
+At step 8:
+    - `offset` would be 4000 % (4950-500) = 4000
+    - batch_data = train_data[4000:4500, ...]
+For the above train size and batch size, the function would execute only up to step 8 due to the `for step in range(int(NUM_EPOCHS * train_size) // BATCH_SIZE)` constraint. 
+
+Every once in a while, we want to print the minibatch loss. This is controlled by `EVAL_FREQUENCY`. We set this to `100`, so for multiples of 100 the evaluation block will execute (i.e. 6 % 100 = 6 but 600 % 6 = 0).
+
+```py
+# create a local session to run the training
+start_time = time.time()
+with tf.Session() as sess:
+    tf.global_variables_initializer().run()
+    # loop through training steps
+    for step in range(int(NUM_EPOCHS * train_size) // BATCH_SIZE):
+        # offset by current minibatch
+        offset = (step * BATCH_SIZE) % (train_size - BATCH_SIZE)
+        batch_data = train_data[offset:(offset + BATCH_SIZE), ...]
+        batch_labels = train_labels[offset:(offset + BATCH_SIZE)]
+        feed_dict = {
+            train_data_node: batch_data,
+            train_labels_node: batch_labels
+        }
+        sess.run(optimizer, feed_dict=feed_dict)
+        if step  % EVAL_FREQUENCY == 0:
+            # fetch some extra nodes' data
+            l, lr, predictions = sess.run([loss, learning_rate, 
+                                    train_prediction], feed_dict=feed_dict)
+            elapsed_time = time.time() - start_time
+            start_time = time.time()
+            print('Step %d (epoch %.2f), %.1f ms' %
+                (step, float(step) * BATCH_SIZE / train_size,
+                1000 * elapsed_time / EVAL_FREQUENCY))
+            print('Minibatch loss: %.3f, learning rate: %.6f' % (l, lr))
+            print('Minibatch error: %.1f%%'
+                  % error_rate(predictions, batch_labels))
+            print('Validation error: %.1f%%' % error_rate(
+                eval_in_batches(validation_data, sess), validation_labels))
+            sys.stdout.flush()
+    # finally print the result:
+    test_error = error_rate(eval_in_batches(test_data, sess), test_labels)
+    print('Test error: %.1f%%' % test_error)
+```
+When we execute the code, we will see loss and error statistics on every multiples of 100. On the final step, we get a test error of 0.9%:
 
 > Step 8500 (epoch 9.89), 420.3 ms  
 > Minibatch loss: 1.603, learning rate: 0.006302  
 > Minibatch error: 0.0%  
 > Validation error: 0.9%  
 > Test error: 0.9%
+
+### Running TensorFlow on Colab
+If you have hardware limitations, I recommend running the code in `cnn.py` on Google Colab, and enable the GPU / TPU option in runtime. 
